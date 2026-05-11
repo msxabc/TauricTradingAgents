@@ -25,6 +25,10 @@ from tradingagents.research.report_builder import (
     build_manual_research_report,
     render_research_report_markdown,
 )
+from tradingagents.research.signal_research_runner import (
+    SignalResearchRunner,
+    SignalResearchRunnerError,
+)
 from tradingagents.research.serialization import model_to_primitive
 from tradingagents.research.ticker_utils import normalize_research_ticker
 
@@ -40,6 +44,7 @@ def run_manual_research_report(
     research_depth: Optional[str] = None,
     scanner_window: Optional[str] = None,
     run_stamp: Optional[str] = None,
+    graph_runner: Optional[SignalResearchRunner] = None,
 ) -> Tuple[ResearchRunResult, Dict[str, Any]]:
     normalized_ticker = normalize_research_ticker(ticker)
 
@@ -111,6 +116,35 @@ def run_manual_research_report(
         detail=detail,
         detail_error=detail_error,
     )
+
+    graph_context: Dict[str, Any] = {}
+    status = RunStatus.DRY_RUN if dry_run else RunStatus.SUCCESS
+    if not dry_run:
+        runner = graph_runner or SignalResearchRunner(config)
+        try:
+            graph_run = runner.run(normalized_ticker, report_date)
+            graph_state = dict(graph_run["final_state"])
+            graph_context = {
+                "market_report": graph_state.get("market_report"),
+                "sentiment_report": graph_state.get("sentiment_report"),
+                "news_report": graph_state.get("news_report"),
+                "fundamentals_report": graph_state.get("fundamentals_report"),
+                "final_trade_decision": graph_state.get("final_trade_decision"),
+                "investment_plan": graph_state.get("investment_plan"),
+                "trader_investment_plan": graph_state.get("trader_investment_plan"),
+                "results_log_path": graph_run.get("results_log_path"),
+                "signal": graph_run.get("signal"),
+            }
+        except SignalResearchRunnerError as exc:
+            status = RunStatus.PARTIAL_SUCCESS
+            errors.append(
+                WorkflowError(
+                    stage="research",
+                    message=str(exc),
+                    retryable=False,
+                )
+            )
+
     report = build_manual_research_report(
         request,
         candidate,
@@ -118,6 +152,7 @@ def run_manual_research_report(
             "run_dir": str(run_dir),
             "ticker_detail_available": "true" if detail else "false",
         },
+        graph_context=graph_context,
     )
     markdown = render_research_report_markdown(report)
 
@@ -131,13 +166,13 @@ def run_manual_research_report(
         "scanner_schema_version": signal_response.get("schema_version"),
         "scanner_score_model_version": signal_response.get("score_model_version"),
         "scanner_generated_at": signal_response.get("generated_at"),
-        "graph_execution": "skipped" if dry_run else "not_implemented",
+        "graph_execution": "skipped" if dry_run else ("completed" if graph_context else "failed"),
     }
 
     result = ResearchRunResult(
         mode=RunMode.MANUAL,
         run_id=run_dir.name,
-        status=RunStatus.DRY_RUN if dry_run else RunStatus.SUCCESS,
+        status=status,
         report_date=report_date,
         archive_path=str(run_dir),
         reports_generated=1,
@@ -154,6 +189,7 @@ def run_manual_research_report(
             "candidate.json": candidate,
             "report.json": report,
             "result.json": result,
+            "graph_context.json": graph_context,
         },
         markdown_artifacts={"report.md": markdown},
     )

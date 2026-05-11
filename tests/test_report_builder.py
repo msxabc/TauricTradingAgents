@@ -33,3 +33,36 @@ class TestReportBuilder:
         assert "# AAPL Research Report" in markdown
         assert "## 19. Evidence Appendix" in markdown
 
+    def test_graph_context_overrides_placeholders(self):
+        request = ManualResearchRequest(
+            ticker="NVDA",
+            report_date="2026-05-11",
+            scanner_window="24h",
+            research_depth=ResearchDepth.STANDARD,
+            dry_run=False,
+        )
+        candidate = ResearchCandidate(
+            ticker="NVDA",
+            company_name="NVIDIA Corporation",
+            query="NVDA",
+            trigger_found=True,
+            matching_signals=[],
+        )
+
+        report = build_manual_research_report(
+            request,
+            candidate,
+            graph_context={
+                "final_trade_decision": "Rating: Buy\nExecutive Summary: Follow through.",
+                "market_report": "Market says risk-on.",
+                "news_report": "News confirms demand.",
+                "fundamentals_report": "Fundamentals still strong.",
+                "results_log_path": "/tmp/nvda.json",
+                "signal": "Buy",
+            },
+        )
+
+        assert report.executive_summary.startswith("Rating: Buy")
+        assert "Market says risk-on." in report.market_technical_context
+        assert "News confirms demand." in report.news_fundamental_verification
+        assert report.source_artifacts["graph_signal"] == "Buy"

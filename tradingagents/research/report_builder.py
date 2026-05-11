@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from tradingagents.research.models import (
     ManualResearchRequest,
@@ -22,7 +22,9 @@ def build_manual_research_report(
     candidate: ResearchCandidate,
     *,
     source_artifacts: Optional[Mapping[str, str]] = None,
+    graph_context: Optional[Mapping[str, Any]] = None,
 ) -> ResearchReport:
+    graph_context = dict(graph_context or {})
     trigger_found = candidate.trigger_found and len(candidate.matching_signals) > 0
     trigger_signal = (
         _build_trigger_signal(candidate) if trigger_found else _NO_TRIGGER
@@ -40,7 +42,7 @@ def build_manual_research_report(
         original_query=request.ticker,
         resolved_entity=candidate.resolved_entity,
         social_trigger_found=trigger_found,
-        executive_summary=_build_executive_summary(candidate, trigger_found),
+        executive_summary=_build_executive_summary(candidate, trigger_found, graph_context),
         why_this_report_was_requested=f"Manual symbol inquiry requested for {candidate.ticker}.",
         trigger_signal=trigger_signal,
         materiality_assessment=(
@@ -49,11 +51,20 @@ def build_manual_research_report(
             else _PLACEHOLDER
         ),
         variant_view=rationale,
-        social_narrative_analysis=dominant_narrative,
+        social_narrative_analysis=_merge_sections(
+            dominant_narrative,
+            _opt_text(graph_context.get("sentiment_report")),
+        ),
         evidence_quality_and_source_hierarchy=_build_evidence_summary(candidate),
         price_assimilation=price_assimilation,
-        market_technical_context=_build_market_context(candidate),
-        news_fundamental_verification=_PLACEHOLDER,
+        market_technical_context=_merge_sections(
+            _build_market_context(candidate),
+            _opt_text(graph_context.get("market_report")),
+        ),
+        news_fundamental_verification=_merge_sections(
+            _opt_text(graph_context.get("news_report")),
+            _opt_text(graph_context.get("fundamentals_report")),
+        ),
         catalyst_clock=catalyst_clock,
         bull_case=_build_bull_case(candidate),
         bear_case=_build_bear_case(candidate),
@@ -63,7 +74,10 @@ def build_manual_research_report(
         monitoring_plan=_build_monitoring_plan(candidate),
         evidence_appendix=_build_evidence_appendix(candidate),
         research_only_disclaimer=_DISCLAIMER,
-        source_artifacts=dict(source_artifacts or {}),
+        source_artifacts={
+            **dict(source_artifacts or {}),
+            **_graph_artifact_refs(graph_context),
+        },
     )
 
 
@@ -150,7 +164,14 @@ def _build_trigger_signal(candidate: ResearchCandidate) -> str:
     return " ".join(lines) if lines else _PLACEHOLDER
 
 
-def _build_executive_summary(candidate: ResearchCandidate, trigger_found: bool) -> str:
+def _build_executive_summary(
+    candidate: ResearchCandidate,
+    trigger_found: bool,
+    graph_context: Mapping[str, Any],
+) -> str:
+    final_decision = _opt_text(graph_context.get("final_trade_decision"))
+    if final_decision:
+        return final_decision
     if trigger_found:
         return (
             f"{candidate.ticker} has active scanner context tied to "
@@ -233,3 +254,26 @@ def _build_evidence_appendix(candidate: ResearchCandidate) -> str:
 
 def _line_or_placeholder(value: Optional[str]) -> str:
     return value or _PLACEHOLDER
+
+
+def _opt_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _merge_sections(*sections: Optional[str]) -> str:
+    cleaned = [section.strip() for section in sections if section and section.strip()]
+    if not cleaned:
+        return _PLACEHOLDER
+    return "\n\n".join(cleaned)
+
+
+def _graph_artifact_refs(graph_context: Mapping[str, Any]) -> dict[str, str]:
+    refs = {}
+    if graph_context.get("results_log_path"):
+        refs["graph_results_log_path"] = str(graph_context["results_log_path"])
+    if graph_context.get("signal") is not None:
+        refs["graph_signal"] = str(graph_context["signal"])
+    return refs
